@@ -419,18 +419,19 @@ static void write_data(uint8_t s, uint16_t data_offset, const uint8_t *data, uin
  * @brief	This function used to send the data in TCP mode
  * @return	1 for success else 0.
  */
-uint16_t EthernetClass::socketSend(uint8_t s, const uint8_t * buf, uint16_t len)
+uint16_t EthernetClass::socketSend(uint8_t s, const uint8_t * buf, uint16_t len, int32_t timeout)
 {
 	uint8_t status=0;
 	uint16_t ret=0;
 	uint16_t freesize=0;
-
+    uint32_t start_time = millis();
+    
 	if (len > W5100.SSIZE) {
-		ret = W5100.SSIZE; // check size not to exceed MAX size.
+        ret = W5100.SSIZE; // check size not to exceed MAX size.
 	} else {
-		ret = len;
+        ret = len;
 	}
-
+    
 	// if freebuf is available, start.
 	do {
 		SPI.beginTransaction(SPI_ETHERNET_SETTINGS);
@@ -441,6 +442,11 @@ uint16_t EthernetClass::socketSend(uint8_t s, const uint8_t * buf, uint16_t len)
 			ret = 0;
 			break;
 		}
+        // check for timeout if enabled
+        if (timeout > 0 && millis() > start_time + timeout)
+        {
+            return 0;
+        }
 		yield();
 	} while (freesize < ret);
 

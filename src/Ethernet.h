@@ -68,6 +68,7 @@ enum EthernetHardwareStatus {
 
 class EthernetUDP;
 class EthernetClient;
+class EthernetTCP;
 class EthernetServer;
 class DhcpClass;
 
@@ -108,6 +109,7 @@ public:
 	friend class EthernetClient;
 	friend class EthernetServer;
 	friend class EthernetUDP;
+    friend class EthernetTCP;
 private:
 	// Opens a socket(TCP or UDP or IP_RAW mode)
 	static uint8_t socketBegin(uint8_t protocol, uint16_t port);
@@ -122,7 +124,7 @@ private:
 	// Establish TCP connection (Passive connection)
 	static uint8_t socketListen(uint8_t s);
 	// Send data (TCP)
-	static uint16_t socketSend(uint8_t s, const uint8_t * buf, uint16_t len);
+	static uint16_t socketSend(uint8_t s, const uint8_t * buf, uint16_t len, int32_t timeout = -1);
 	static uint16_t socketSendAvailable(uint8_t s);
 	// Receive data (TCP)
 	static int socketRecv(uint8_t s, uint8_t * buf, int16_t len);
@@ -209,8 +211,6 @@ public:
 };
 
 
-
-
 class EthernetClient : public Client {
 public:
 	EthernetClient() : _sockindex(MAX_SOCK_NUM), _timeout(1000) { }
@@ -228,7 +228,21 @@ public:
 	virtual int read(uint8_t *buf, size_t size);
 	virtual int peek();
 	virtual void flush();
+
+    /**
+     * @brief Attempts do disconnect the socket
+     * gracefully and blocks until that happens.
+     * If the disconnect times out, the socket is
+     * closed forcefully.
+     * 
+     * @attention This method DOES BLOCK. 
+     * To use a non-blocking interface,
+     * use the `EthernetTCP` class and it's
+     * non-blocing methods `disconnect()` and 
+     * `close()` instead.
+     */
 	virtual void stop();
+    
 	virtual uint8_t connected();
 	virtual operator bool() { return _sockindex < MAX_SOCK_NUM; }
 	virtual bool operator==(const bool value) { return bool() == value; }
@@ -245,9 +259,110 @@ public:
 
 	using Print::write;
 
-private:
+protected:
 	uint8_t _sockindex; // MAX_SOCK_NUM means client not in use
 	uint16_t _timeout;
+};
+
+/**
+ * @brief Modified version of the EthernetClient class
+ * that implements a TCP connection without blocking loops
+ * in the connect and disconnect phase. Instead, the user 
+ * should check the connection status themselves externally.
+ * 
+ * The DNS-based connect() overload does still block, since
+ * it has to perform a DNS resolution before being able to
+ * initiate the connection.
+ * The timeout setting of EthernetTCP is used exclusively
+ * for this purpose.
+ * If you whish to do the DNS resolution without blocking
+ * connect, you can do it externally and then use the IPAddress
+ * based overload.
+ * 
+ * Additionally, write is also still blocking as we need
+ * to wait for the W5100 chip to have free buffer space before we 
+ * can write our data there.
+ * As a compromise on that, a writeWithTimeout() method has been added,
+ * allowing us to wait no longer than a specific timeout for writing.
+ * Thankfully the actual write operation happens after the buffer has
+ * space to fit all of our data, so either all or none of the data is
+ * transmitted.
+ * 
+ */
+class EthernetTCP : public EthernetClient {
+public:
+    using EthernetClient::EthernetClient;
+	virtual ~EthernetTCP() {};
+
+    /**
+     * @brief Initiates the TCP connection to the given host and port.
+     * Unlike the EthernetClient version, this method does not block
+     * until the connection is established or timed out. Instead, it
+     * always returns immediately and the user must check for connection
+     * timeouts themselves using `connected()` or `status()`.
+     * 
+     * @param ip host address to connect to
+     * @param port port to connect to
+     * @retval 0 - address invalid
+     * @retval 1 - successfully initiated connection (does NOT mean we are connected)
+     */
+	virtual int connect(IPAddress ip, uint16_t port) override;
+
+    /**
+     * @brief Resolves the domain name passed to `host`
+     * and then initiates a TCP connection to the
+     * resolved host and provided port.
+     * 
+     * @attention This will block until the domain name is resolved (or
+     * timeout), but it will not block after the connection is established.
+     * Checking for connection success has to be done manually.
+     * 
+     * @param host host name to connect to
+     * @param port port to connect to
+     * @retval 0 - DNS resolve timeout or address invalid
+     * @retval 1 - successfully initiated connection (does NOT mean we are connected)
+     */
+	virtual int connect(const char *host, uint16_t port) override;
+
+    /**
+     * @brief Writes `size` bytes from `buf` to the socket
+     * with a timeout.
+     * 
+     * @param buf source data
+     * @param size size to write (maximum is 2048, as that is the W5100 hardware limit)
+     * @param timeout maximum number of ms to wait for available buffer space.
+     * When this time is reached, 0 is returned immediately and no data is sent at all.
+     * Either all or no data is sent.
+     * @return size_t number of bytes transmitted or 0 for error (including timeout)
+     */
+	virtual size_t writeWithTimeout(const uint8_t *buf, size_t size, uint16_t timeout);
+
+    /**
+     * @brief Initiates a graceful disconnect.
+     * This method doesn't block until the disconnect is complete.
+     * The user should instead use `status()` to wait
+     * until the socket is disconnected (CLOSED) and then
+     * call `close()`.
+     * 
+     * @attention The call to `close()` is mandatory to mark
+     * the socket as closed, even if a graceful disconnect
+     * was successful.
+     */
+    virtual void disconnect();
+
+    /**
+     * @brief Forcefully closes the socket
+     * if it is not closed already and marks the
+     * instance as closed, ready for a new connection.
+     * 
+     * @note This is to be called both when graceful 
+     * disconnect was successful and when it wasn't.
+     */
+    virtual void close();
+	
+
+	friend class EthernetServer;
+	using Print::write;
 };
 
 
